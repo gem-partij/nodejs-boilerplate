@@ -1,41 +1,85 @@
-var createError = require('http-errors');
-var express = require('express');
-var path = require('path');
-var cookieParser = require('cookie-parser');
-var logger = require('morgan');
+require("dotenv").config();
+require("sexy-require");
 
-var indexRouter = require('./routes/index');
-var usersRouter = require('./routes/users');
+if (process.env.GBT_ENV == "production") {
+	const Sentry = require("@sentry/node");
+	Sentry.init({
+		dsn: "",
+	});
+}
 
-var app = express();
+const createError = require("http-errors");
+const logger = require("morgan");
+const path = require("path");
+const rfs = require("rotating-file-stream");
 
-// view engine setup
-app.set('views', path.join(__dirname, 'views'));
-app.set('view engine', 'jade');
+const express = require("express");
+const cors = require("cors");
+// const bodyParser = require("body-parser");
 
-app.use(logger('dev'));
+const app = express();
+
+// const accessLogStream = rfs.createStream("access.log", {
+// 	interval: "1d", // rotate daily
+// 	path: path.join(__dirname, "logs"),
+// });
+
+app.use(logger("dev"));
+
+// create a rotating write stream
+const errorLogStream = rfs.createStream("access-error.log", {
+	interval: "1d", // rotate daily
+	path: path.join(__dirname, "logs/errors"),
+});
+// log only 4xx and 5xx responses to file
+app.use(
+	logger("combined", {
+		stream: errorLogStream,
+		skip: (req, res) => {
+			return res.statusCode < 400;
+		},
+	})
+);
+
+app.use(cors());
+// app.use(bodyParser.json());
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
-app.use(cookieParser());
-app.use(express.static(path.join(__dirname, 'public')));
 
-app.use('/', indexRouter);
-app.use('/users', usersRouter);
+app.use("/", require("/routes/index"));
+// app.use("/auth", require("/routes/auth"));
+// app.use("/users", require("/routes/users"));
+
+app.use(require("/middlewares/validate_token"));
+app.use("/survey", require("/routes/survey"));
 
 // catch 404 and forward to error handler
-app.use(function(req, res, next) {
-  next(createError(404));
+app.use(function (req, res, next) {
+	next(createError(404));
 });
 
 // error handler
-app.use(function(err, req, res, next) {
-  // set locals, only providing error in development
-  res.locals.message = err.message;
-  res.locals.error = req.app.get('env') === 'development' ? err : {};
+app.use(function (err, req, res, next) {
+	const modeDevelopment = req.app.get("env") === "development";
 
-  // render the error page
-  res.status(err.status || 500);
-  res.render('error');
+	// set locals, only providing error in development
+	res.locals.message = err.message;
+	res.locals.error = modeDevelopment ? err : {};
+
+	let errResponse = err;
+	if (err.name === "UnauthorizedError" && !modeDevelopment) {
+		errResponse = "Unauthorized";
+	}
+
+	// console.log(errResponse);
+
+	// render the error page
+	res.status(err.status || 500);
+	res.send({
+		status: err.status,
+		message: err.message,
+		data: errResponse,
+	});
 });
 
 module.exports = app;
